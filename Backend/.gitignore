@@ -2,6 +2,3 @@
 .env.*
 !.env.example
 
-node_modules/
-Frontend/node_modules/
-Frontend/dist/
