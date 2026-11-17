@@ -103,17 +103,6 @@ router.post("/initiate-bgc", async (req, res) => {
         }
 
 
-        if (String(vendor).toLowerCase() === "adamma" && !preProfileNumber) {
-
-            return res.status(400).json({
-                success: false,
-                message:
-                    "Pre Profile Number is required"
-            });
-
-        }
-
-
         if (!Array.isArray(selectedDocs) || selectedDocs.length === 0) {
 
             return res.status(400).json({

@@ -33,6 +33,17 @@ function apiUrl(path) {
     return `${API_BASE_URL}${path}`;
 }
 
+function normalizeChecklistName(name) {
+    return String(name || "")
+        .toLowerCase()
+        .replace(/\beducational\b/g, "education")
+        .replace(/\b(?:highest|lowest|last|first|previous|current|years?|year|check|verification|qualification|credential|screening)\b/g, " ")
+        .replace(/\b\d+\b/g, " ")
+        .replace(/[^a-z]+/g, " ")
+        .trim()
+        .replace(/\s+/g, " ");
+}
+
 function formatSuccessFactorsDate(value) {
     const match = typeof value === "string"
         ? value.match(/^\/Date\((-?\d+)(?:[+-]\d+)?\)\/$/)
@@ -317,6 +328,8 @@ function App() {
     const [clientNotice, setClientNotice] = useState("");
     const [selectedClient, setSelectedClient] = useState("");
     const [selectedClientChecks, setSelectedClientChecks] = useState([]);
+    const [clientCheckDescriptions, setClientCheckDescriptions] = useState({});
+    const [clientCheckQuantities, setClientCheckQuantities] = useState({});
     // Which list the "Checks to Initiate" section shows: "" (none yet, only
     // the two buttons), "client" or "vendor"
     const [checklistMode, setChecklistMode] = useState("");
@@ -412,6 +425,34 @@ function App() {
             cancelled = true;
         };
     }, [screen, vendor]);
+
+    useEffect(() => {
+        const selectedClientChecksForClient = getClientChecks(selectedClient)
+            .filter(check => selectedClientChecks.includes(check.id));
+        if (!selectedClientChecksForClient.length || !checks.length) return;
+
+        const clientCheckNames = new Set(
+            selectedClientChecksForClient
+                .map(check => normalizeChecklistName(check.name))
+                .filter(Boolean)
+        );
+        const matchingVendorChecks = checks.filter(check =>
+            clientCheckNames.has(normalizeChecklistName(check.name))
+        );
+        if (!matchingVendorChecks.length) return;
+
+        setSelectedChecks(previous => {
+            const additions = matchingVendorChecks
+                .filter(check => !previous.some(selected => selected.id === check.id))
+                .map(check => ({
+                    id: check.id,
+                    name: check.name,
+                    quantity: 1,
+                    description: check.description || ""
+                }));
+            return additions.length ? [...previous, ...additions] : previous;
+        });
+    }, [checks, clientChecklists, selectedClient, selectedClientChecks]);
 
 
     // =====================================================
@@ -1172,14 +1213,6 @@ function App() {
             }
 
 
-            if (vendor.toLowerCase() === "adamma" && !preProfileNumber.trim()) {
-                showError("Please enter Pre Profile Number");
-
-                return;
-
-            }
-
-
             if (
                 selectedDocuments.length === 0
             ) {
@@ -1218,9 +1251,6 @@ function App() {
 
                 vendor:
                     vendor,
-
-                preProfileNumber:
-                    preProfileNumber.trim(),
 
                 docType:
                     "BrassRing",
@@ -1569,9 +1599,71 @@ function App() {
     }
 
     function toggleClientCheck(id) {
-        setSelectedClientChecks(previous =>
-            previous.includes(id) ? previous.filter(item => item !== id) : [...previous, id]
+        const isSelected = selectedClientChecks.includes(id);
+        const clientChecks = getClientChecks(selectedClient);
+        const matchingVendorChecks = getMatchingVendorChecks(
+            clientChecks.filter(check => check.id === id)
         );
+        const remainingVendorCheckIds = new Set(
+            getMatchingVendorChecks(
+                clientChecks.filter(check =>
+                    check.id !== id && selectedClientChecks.includes(check.id)
+                )
+            ).map(check => check.id)
+        );
+
+        setSelectedClientChecks(previous =>
+            isSelected ? previous.filter(item => item !== id) : [...previous, id]
+        );
+        setSelectedChecks(previous => {
+            if (isSelected) {
+                const removedVendorCheckIds = new Set(
+                    matchingVendorChecks
+                        .filter(check => !remainingVendorCheckIds.has(check.id))
+                        .map(check => check.id)
+                );
+                return previous.filter(check => !removedVendorCheckIds.has(check.id));
+            }
+
+            const additions = matchingVendorChecks
+                .filter(check => !previous.some(selected => selected.id === check.id))
+                .map(check => ({
+                    id: check.id,
+                    name: check.name,
+                    quantity: 1,
+                    description: check.description || ""
+                }));
+            return additions.length ? [...previous, ...additions] : previous;
+        });
+        setClientCheckQuantities(previous => ({
+            ...previous,
+            [id]: isSelected ? 0 : Math.max(1, Number(previous[id]) || 1)
+        }));
+    }
+
+    function getMatchingVendorChecks(clientChecksToMatch) {
+        const normalizedClientNames = new Set(
+            clientChecksToMatch
+                .map(check => normalizeChecklistName(check.name))
+                .filter(Boolean)
+        );
+        return checks.filter(check =>
+            normalizedClientNames.has(normalizeChecklistName(check.name))
+        );
+    }
+
+    function updateClientCheckDescription(id, description) {
+        setClientCheckDescriptions(previous => ({
+            ...previous,
+            [id]: description
+        }));
+    }
+
+    function updateClientCheckQuantity(id, quantity) {
+        setClientCheckQuantities(previous => ({
+            ...previous,
+            [id]: Math.max(1, parseInt(quantity, 10) || 1)
+        }));
     }
 
     // Links a case created before the portal remembered cases, then shows it.
@@ -2708,60 +2800,72 @@ function App() {
 
                     <div className="employee-info">
 
-                        <div>
-                            <strong>Name</strong>
-                            <span>
-                                {employeeInfo.name}
-                            </span>
+                        <div className="employee-info-column">
+                            <div className="employee-info-row">
+                                <span className="employee-info-label">Employee Name</span>
+                                <span className="employee-info-value">{employeeInfo.name || "-"}</span>
+                            </div>
 
-                            <strong>Project</strong>
-                            <span>
-                                {employeeInfo.project}
-                            </span>
+                            <div className="employee-info-row">
+                                <span className="employee-info-label">Project</span>
+                                <span className="employee-info-value">{employeeInfo.project || "-"}</span>
+                            </div>
+
+                            <div className="employee-info-row">
+                                <span className="employee-info-label">Business Unit</span>
+                                <span className="employee-info-value">{employeeInfo.bu || employeeInfo.businessUnit || "-"}</span>
+                            </div>
                         </div>
 
+                        <div className="employee-info-column">
+                            <div className="employee-info-row">
+                                <span className="employee-info-label">Employee Number</span>
+                                <span className="employee-info-value">{employeeInfo.employeeId || "-"}</span>
+                            </div>
 
-                        <div>
-                            <strong>Employee ID</strong>
-                            <span>
-                                {employeeInfo.employeeId}
-                            </span>
+                            <div className="employee-info-row">
+                                <span className="employee-info-label">Client</span>
+                                <span className="employee-info-value employee-info-value-picker">
+                                    <ClientPicker
+                                        clients={clientChecklists.map(item => item.client)}
+                                        value={selectedClient}
+                                        loading={clientChecklistsLoading}
+                                        onChange={client => {
+                                            setSelectedClient(client);
+                                            setSelectedClientChecks([]);
+                                        }}
+                                    />
+                                    {clientChecklistsError && (
+                                        <small className="client-select-error">{clientChecklistsError}</small>
+                                    )}
+                                </span>
+                            </div>
 
-                            <strong>Client</strong>
-                            <span>
-                                <ClientPicker
-                                    clients={clientChecklists.map(item => item.client)}
-                                    value={selectedClient}
-                                    loading={clientChecklistsLoading}
-                                    onChange={client => {
-                                        setSelectedClient(client);
-                                        setSelectedClientChecks([]);
-                                    }}
-                                />
-                                {clientChecklistsError && (
-                                    <small className="client-select-error">{clientChecklistsError}</small>
-                                )}
-                            </span>
+                            <div className="employee-info-row">
+                                <span className="employee-info-label">Sub Business Unit</span>
+                                <span className="employee-info-value">
+                                    {employeeInfo.subBusinessUnit || employeeInfo.subBusinessUnitName || employeeInfo.secondaryProject || "-"}
+                                </span>
+                            </div>
                         </div>
 
+                        <div className="employee-info-column">
+                            <div className="employee-info-row">
+                                <span className="employee-info-label">Reporting Manager</span>
+                                <span className="employee-info-value">{employeeInfo.manager || employeeInfo.reportingManager || "-"}</span>
+                            </div>
 
-                        <div>
-                            <strong>Manager</strong>
-                            <span>
-                                {employeeInfo.manager}
-                            </span>
+                            <div className="employee-info-row">
+                                <span className="employee-info-label">Grade</span>
+                                <span className="employee-info-value">{employeeInfo.grade || employeeInfo.band || "-"}</span>
+                            </div>
 
-                            <strong>Joining Date</strong>
-                            <span>
-                                {formatSuccessFactorsDate(employeeInfo.joiningDate)}
-                            </span>
-
-                            <strong>BGV Profile Number</strong>
-                            <span className="profile-number">
-                                {vendorCase?.caseId
-                                    ? `${vendorCase.caseId} (${vendorCase.label})`
-                                    : "-"}
-                            </span>
+                            <div className="employee-info-row">
+                                <span className="employee-info-label">Joining Date</span>
+                                <span className="employee-info-value">
+                                    {formatSuccessFactorsDate(employeeInfo.joiningDate)}
+                                </span>
+                            </div>
                         </div>
 
                     </div>
@@ -2769,44 +2873,6 @@ function App() {
                 </div>
 
             )}
-
-            {employeeInfo && !vendorCase?.caseId && (
-                <div className="section link-case">
-                    <div className="link-case-text">
-                        <strong>Already submitted to {VENDOR_NAMES[String(vendor).toLowerCase()] || vendor}?</strong>
-                        <span>
-                            Enter the BGV Profile Number (case ID) once to show its status here.
-                            Choose the vendor in the Vendor field below first.
-                        </span>
-                    </div>
-                    <input
-                        type="text"
-                        value={linkCaseId}
-                        onChange={event => setLinkCaseId(event.target.value)}
-                        placeholder="e.g. 61836 or ATES157"
-                        aria-label="BGV Profile Number of the existing case"
-                    />
-                    {String(vendor).toLowerCase() === "cfirst" && (
-                        <input
-                            type="text"
-                            value={linkRefId}
-                            onChange={event => setLinkRefId(event.target.value)}
-                            placeholder="cFirst Ref ID (optional)"
-                            aria-label="cFirst Ref ID"
-                        />
-                    )}
-                    <button
-                        type="button"
-                        className="case-button case-button-primary"
-                        onClick={linkExistingCase}
-                        disabled={vendorCaseLoading || !linkCaseId.trim()}
-                    >
-                        {vendorCaseLoading ? "Loading..." : "Get Status"}
-                    </button>
-                    {linkError && <div className="link-case-error">{linkError}</div>}
-                </div>
-            )}
-
 
             <div className="section submit-setup">
                 <div className="section-header section-header-split">
@@ -2831,19 +2897,14 @@ function App() {
                     </div>
 
                     <div className="form-field">
-                        <label htmlFor="employment-id">Employment ID</label>
+                        <label htmlFor="bgv-profile-number">BGV Profile Number</label>
                         <input
-                            id="employment-id"
+                            id="bgv-profile-number"
                             type="text"
-                            value={previousEmploymentId}
-                            onChange={e => setPreviousEmploymentId(e.target.value)}
-                            onBlur={() => employeeInfo && loadEmployeeAttachments(
-                                employeeInfo,
-                                previousEmploymentId.trim()
-                            )}
-                            placeholder="SuccessFactors externalCode"
+                            value={vendorCase?.caseId ? `${vendorCase.caseId} (${vendorCase.label})` : "-"}
+                            readOnly
+                            aria-label="BGV profile number"
                         />
-                        <small>Documents reload when you leave this field.</small>
                     </div>
 
                     {vendor.toLowerCase() === "cfirst" && (
@@ -2867,19 +2928,6 @@ function App() {
                                     {packages.find(item => item.id === selectedPackageId).description}
                                 </small>
                             )}
-                        </div>
-                    )}
-
-                    {vendor.toLowerCase() !== "cfirst" && (
-                        <div className="form-field">
-                            <label htmlFor="pre-profile-number">Pre Profile Number</label>
-                            <input
-                                id="pre-profile-number"
-                                type="text"
-                                value={preProfileNumber}
-                                onChange={e => setPreProfileNumber(e.target.value)}
-                                placeholder="Enter pre profile number"
-                            />
                         </div>
                     )}
 
@@ -3062,46 +3110,71 @@ function App() {
                                 <tr>
                                     <th>Select</th>
                                     <th>Check Name</th>
-                                    <th>Client</th>
+                                    <th>Description</th>
+                                    <th>Quantity</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {clientChecklistsLoading && (
-                                    <tr><td colSpan="3">Loading client checklist…</td></tr>
+                                    <tr><td colSpan="4">Loading client checklist…</td></tr>
                                 )}
                                 {!clientChecklistsLoading && clientChecklistsError && (
-                                    <tr><td colSpan="3">{clientChecklistsError}</td></tr>
+                                    <tr><td colSpan="4">{clientChecklistsError}</td></tr>
                                 )}
                                 {!clientChecklistsLoading && !clientChecklistsError && !selectedClient && (
                                     <tr>
-                                        <td colSpan="3" className="client-checks-hint">
+                                        <td colSpan="4" className="client-checks-hint">
                                             Select the client in Employee Information to see its checklist.
                                         </td>
                                     </tr>
                                 )}
                                 {!clientChecklistsLoading && selectedClient && getClientChecks(selectedClient).length === 0 && (
-                                    <tr><td colSpan="3">No checks are set up for {selectedClient}.</td></tr>
+                                    <tr><td colSpan="4">No checks are set up for {selectedClient}.</td></tr>
                                 )}
-                                {selectedClient && getClientChecks(selectedClient).map(check => (
-                                    <tr key={check.id}>
-                                        <td>
-                                            <input
-                                                type="checkbox"
-                                                checked={selectedClientChecks.includes(check.id)}
-                                                onChange={() => toggleClientCheck(check.id)}
-                                                aria-label={check.name}
-                                            />
-                                        </td>
-                                        <td>{check.name}</td>
-                                        <td className="client-checks-client">{selectedClient}</td>
-                                    </tr>
-                                ))}
+                                {selectedClient && getClientChecks(selectedClient).map(check => {
+                                    const selected = selectedClientChecks.includes(check.id);
+                                    return (
+                                        <tr key={check.id}>
+                                            <td>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selected}
+                                                    onChange={() => toggleClientCheck(check.id)}
+                                                    aria-label={check.name}
+                                                />
+                                            </td>
+                                            <td>{check.name}</td>
+                                            <td>
+                                                <input
+                                                    type="text"
+                                                    value={clientCheckDescriptions[check.id] ?? check.description ?? ""}
+                                                    placeholder="Type"
+                                                    onChange={event => updateClientCheckDescription(check.id, event.target.value)}
+                                                    aria-label={`Description for ${check.name}`}
+                                                />
+                                            </td>
+                                            <td>
+                                                <input
+                                                    className="quantity"
+                                                    type="number"
+                                                    min="1"
+                                                    value={selected
+                                                        ? clientCheckQuantities[check.id] ?? check.quantity ?? 1
+                                                        : 0}
+                                                    disabled={!selected}
+                                                    onChange={event => updateClientCheckQuantity(check.id, event.target.value)}
+                                                    aria-label={`Quantity for ${check.name}`}
+                                                />
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
                                 {selectedClient && getClientChecks(selectedClient).length > 0 && (
                                     <tr>
-                                        <td colSpan="3" className="client-checks-hint">
+                                        <td colSpan="4" className="client-checks-hint">
                                             {selectedClientChecks.length} of {getClientChecks(selectedClient).length} client checks selected.
-                                            To send checks to {VENDOR_NAMES[String(vendor).toLowerCase()] || vendor}, tick the matching
-                                            checks under <button type="button" className="link-button" onClick={() => setChecklistMode("vendor")}>Vendor Checklist</button>.
+                                            Matching checks are automatically selected for {VENDOR_NAMES[String(vendor).toLowerCase()] || vendor} in the
+                                            {" "}<button type="button" className="link-button" onClick={() => setChecklistMode("vendor")}>Vendor Checklist</button>.
                                         </td>
                                     </tr>
                                 )}
@@ -3279,15 +3352,6 @@ function App() {
                 )}
 
                 <div className="submit-row">
-
-                <div className="submit-summary">
-                    <strong>Submit to {VENDOR_NAMES[String(vendor).toLowerCase()] || vendor}</strong>
-                    <span>
-                        {selectedDocuments.length} document{selectedDocuments.length === 1 ? "" : "s"}
-                        {" · "}
-                        {selectedChecks.length} check{selectedChecks.length === 1 ? "" : "s"} selected
-                    </span>
-                </div>
 
                 {message && (
                     <div className={`message message-${messageType}`} role="status">

@@ -844,6 +844,19 @@ async function findBusinessUnitByCode(code) {
     ) || null;
 }
 
+async function findDivisionByCode(code) {
+    const response = await getSuccessFactorsResource("FODivision", {
+        $filter: `externalCode eq '${escapeODataString(code)}'`,
+        $select: "externalCode,name,name_defaultValue,name_localized",
+        asOfDate: getBgvAsOfDate(),
+        $top: 1
+    });
+
+    return getODataObject(response.data).find(record =>
+        String(record.externalCode ?? "") === String(code)
+    ) || null;
+}
+
 async function findBusinessUnitByName(name) {
     const escapedName = escapeODataString(name);
     const response = await getSuccessFactorsResource("FOBusinessUnit", {
@@ -1048,6 +1061,53 @@ async function getEmployeeInitiationDetails(employeeId) {
     };
 }
 
+async function getEmployeeBgvFields(employeeId) {
+    const escapedEmployeeId = escapeODataString(employeeId);
+    const personFilter = `personIdExternal eq '${escapedEmployeeId}'`;
+    const [personResponse, phoneResponse, personalResponse, nationalIdResponse, emailResponse, jobResponse] =
+        await Promise.all([
+            getSuccessFactorsResource("PerPerson", { $filter: personFilter }),
+            getSuccessFactorsResource("PerPhone", { $filter: personFilter }),
+            getSuccessFactorsResource("PerPersonal", { $filter: personFilter }),
+            getSuccessFactorsResource("PerNationalId", { $filter: personFilter }),
+            getSuccessFactorsResource("PerEmail", {
+                $filter: `${personFilter} and emailType eq '34402'`
+            }),
+            getSuccessFactorsResource("EmpJob", {
+                $filter: `userId eq '${escapedEmployeeId}'`,
+                asOfDate: getBgvAsOfDate(),
+                $top: 1
+            })
+        ]);
+
+    const person = getODataObject(personResponse.data)[0] || {};
+    const phones = getODataObject(phoneResponse.data);
+    const personal = getODataObject(personalResponse.data)[0] || {};
+    const nationalIds = getODataObject(nationalIdResponse.data);
+    const email = getODataObject(emailResponse.data)[0] || {};
+    const job = getODataObject(jobResponse.data)[0] || {};
+    const primaryPhone = phones.find(phone =>
+        phone.isPrimary === true || String(phone.isPrimary).toLowerCase() === "true"
+    ) || phones[0] || {};
+    const panRecord = nationalIds.find(record =>
+        String(record.cardType || "").toUpperCase().includes("PAN")
+    );
+    const aadhaarRecord = nationalIds.find(record =>
+        /^(ADN|AADHAAR|AADHAR)$/.test(String(record.cardType || "").toUpperCase())
+    );
+
+    return {
+        dateOfBirth: getFirstValue(person, ["dateOfBirth"]),
+        phoneNumber: getFirstValue(primaryPhone, ["phoneNumber"]),
+        gender: getFirstValue(personal, ["gender"]),
+        panNumber: getFirstValue(panRecord, ["nationalId"]),
+        aadhaarNumber: getFirstValue(aadhaarRecord, ["nationalId"]),
+        emailAddress: getFirstValue(email, ["emailAddress"]),
+        hireDate: getFirstValue(job, ["hireDate"])
+    };
+}
+
+
 async function createBgvEmployee({
     employeeId,
     employeeName,
@@ -1089,6 +1149,7 @@ async function createBgvEmployee({
         throw error;
     }
 
+    const employeeBgvFields = await getEmployeeBgvFields(selectedEmployeeId);
     const effectiveDate = getBgvAsOfDate();
     const [year, month, day] = effectiveDate.split("-").map(Number);
     const effectiveDateMillis = Date.UTC(year, month - 1, day);
@@ -1103,7 +1164,14 @@ async function createBgvEmployee({
         cust_BU: selectedBusinessUnitCode,
         cust_CustomerLocation: String(client || "").trim(),
         cust_PrimaryProject: selectedPrimaryProject,
-        cust_RM: selectedManagerName
+        cust_RM: selectedManagerName,
+        cust_DOB: employeeBgvFields.dateOfBirth,
+        cust_PhoneNumber: employeeBgvFields.phoneNumber,
+        cust_Gender: employeeBgvFields.gender,
+        cust_PANNumber: employeeBgvFields.panNumber,
+        cust_Aadharnumber: employeeBgvFields.aadhaarNumber,
+        cust_CandidateEmail: employeeBgvFields.emailAddress,
+        cust_DOJ: employeeBgvFields.hireDate
     }];
 
     let response;
@@ -1156,10 +1224,18 @@ async function getEmployeeDetails(employeeId) {
             `No cust_BGV record found for employee ID ${employeeId}`
         );
     }
-    const documents = await getEmployeeDocuments(
-        employeeId,
-        employee.externalCode
-    );
+    const [documents, jobResponse] = await Promise.all([
+        getEmployeeDocuments(employeeId, employee.externalCode),
+        getSuccessFactorsResource("EmpJob", {
+            $filter: `userId eq '${escapeODataString(employee.cust_Employee_ID || employeeId)}'`,
+            $select: "userId,payGrade,division",
+            asOfDate: getBgvAsOfDate(),
+            $top: 1
+        })
+    ]);
+    const job = getODataObject(jobResponse.data)[0] || {};
+    const divisionCode = getFirstValue(job, ["division"]);
+    const division = divisionCode ? await findDivisionByCode(divisionCode) : null;
 
     return {
         employeeInfo: {
@@ -1171,6 +1247,8 @@ async function getEmployeeDetails(employeeId) {
             client: employee.cust_CustomerLocation || "-",
             project: employee.cust_PrimaryProject || "-",
             secondaryProject: employee.cust_SecondaryProject || "",
+            subBusinessUnitName: getBusinessUnitName(division) || "",
+            grade: getFirstValue(job, ["payGrade"]),
             joiningDate: employee.cust_DOJ || "-",
             phone: employee.cust_PhoneNumber || "-",
             email: employee.cust_CandidateEmail || "-",
