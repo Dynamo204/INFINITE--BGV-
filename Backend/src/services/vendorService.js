@@ -7,6 +7,7 @@ const {
     getCFirstCandidateSourceData,
     findBgvRecordByEmployeeId,
     updateBgvRecord,
+    uploadBgvAttachment,
     resolveBgvStatusCode,
     findPicklistCode,
     getCaseIdField
@@ -1402,8 +1403,139 @@ async function getSelectedDocumentsForSubmission(payload) {
     return selectedFiles;
 }
 
-function buildParishramCasePayload(payload) {
+// ---------------------------------------------------------------------------
+// Real details for Parishram checks. They come from SuccessFactors
+// (Previous Employment, Education, Address) and HR can correct them on the
+// BGV screen before submitting ("Check Details for Parishram").
+// ---------------------------------------------------------------------------
+const PARISHRAM_DETAIL_FIELDS = {
+    "Employment Credential Check": [
+        "employerName", "designation", "tenure", "employeeCode",
+        "rmName", "rmNumber", "hrName", "hrNumberMailId"
+    ],
+    "Educational Qualification Check": [
+        "universityName", "collegeName", "yearOfPassing",
+        "registrationEnrollmentNo", "rollNumber"
+    ],
+    "Digital Residential Address Check": [
+        "addressType", "completeAddress", "city", "state", "pinCode",
+        "landmark", "residentialType", "tenure", "contactNo", "alternateNo"
+    ]
+};
+
+function parseAnyDate(value) {
+    if (!value) return null;
+    const text = String(value);
+    const sf = text.match(/^\/Date\((-?\d+)/);
+    const ddmmyyyy = text.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    const date = sf ? new Date(Number(sf[1]))
+        : ddmmyyyy ? new Date(Date.UTC(+ddmmyyyy[3], +ddmmyyyy[2] - 1, +ddmmyyyy[1]))
+            : new Date(text);
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+
+// "2 Years 3 Months" between two dates (end empty = today)
+function formatTenure(startValue, endValue) {
+    const start = parseAnyDate(startValue);
+    if (!start) return "";
+    const end = parseAnyDate(endValue) || new Date();
+    let months = (end.getUTCFullYear() - start.getUTCFullYear()) * 12 +
+        (end.getUTCMonth() - start.getUTCMonth());
+    if (end.getUTCDate() < start.getUTCDate()) months -= 1;
+    if (months < 0) return "";
+    const years = Math.floor(months / 12);
+    const rest = months % 12;
+    const parts = [];
+    if (years) parts.push(`${years} Year${years === 1 ? "" : "s"}`);
+    if (rest || !years) parts.push(`${rest} Month${rest === 1 ? "" : "s"}`);
+    return parts.join(" ");
+}
+
+// Suggested Parishram check details from SuccessFactors data
+function buildParishramDetailsFromSource(source, candidateInfo = {}) {
+    const employee = source?.employee || {};
+    const phone = parishramValue(candidateInfo.phone || employee.cust_PhoneNumber);
+    const employment = mapCFirstEmployments(source?.employments || [])[0] || {};
+    const firstEmploymentRecord = (source?.employments || [])[0] || {};
+    const education = mapCFirstEducations(source?.educations || [])[0] || {};
+    const address = mapCFirstAddresses(source?.addresses || [])[0] || {};
+    // cust_BGV has the candidate's addresses as text; used first when filled
+    const bgvCurrentAddress = parishramValue(employee.cust_CurrentAddress);
+    const bgvPermanentAddress = parishramValue(employee.cust_Permanantaddress);
+    const sfAddressText = [address.Address, address.City, address.State, address.PostalCode]
+        .filter(Boolean).join(", ");
+
+    return {
+        "Employment Credential Check": {
+            employerName: employment.Employer || "",
+            designation: employment.Designation || "",
+            tenure: formatTenure(
+                getSlotValue(firstEmploymentRecord, "cust_From", 1),
+                getSlotValue(firstEmploymentRecord, "cust_To", 1)
+            ),
+            employeeCode: parishramValue(
+                getSlotValue(firstEmploymentRecord, "cust_EmployeeID", 1) ||
+                getSlotValue(firstEmploymentRecord, "cust_EmployeeCode", 1)
+            ),
+            rmName: employment.RMName || "",
+            rmNumber: employment.RMPhone || "",
+            hrName: parishramValue(
+                getSlotValue(firstEmploymentRecord, "cust_HRName", 1) ||
+                getSlotValue(firstEmploymentRecord, "cust_HrName", 1)
+            ),
+            hrNumberMailId: parishramValue(
+                getSlotValue(firstEmploymentRecord, "cust_HREmail", 1) ||
+                getSlotValue(firstEmploymentRecord, "cust_HrEmail", 1) ||
+                getSlotValue(firstEmploymentRecord, "cust_HRNo", 1)
+            ) || employment.RMEmail || ""
+        },
+        "Educational Qualification Check": {
+            universityName: education.University || "",
+            collegeName: education.School || "",
+            yearOfPassing: String(education.EndDate || "").slice(-4),
+            registrationEnrollmentNo: "",
+            rollNumber: ""
+        },
+        "Digital Residential Address Check": {
+            addressType: bgvCurrentAddress || !bgvPermanentAddress ? "Current" : "Permanent",
+            completeAddress: bgvCurrentAddress || bgvPermanentAddress || address.Address || "",
+            city: address.City || "",
+            state: address.State || "",
+            pinCode: address.PostalCode || "",
+            landmark: "",
+            residentialType: "",
+            tenure: formatTenure(address.StartDate, address.EndDate),
+            contactNo: phone,
+            alternateNo: ""
+        },
+        // Used by the court / database / credit checks
+        candidate: {
+            address: bgvCurrentAddress || bgvPermanentAddress || sfAddressText
+        }
+    };
+}
+
+async function getParishramCheckDetails({ employeeId, educationRecordId, previousEmploymentId, candidateInfo }) {
+    const source = await getCFirstCandidateSourceData(
+        employeeId,
+        educationRecordId || employeeId,
+        previousEmploymentId || educationRecordId || employeeId
+    );
+    return buildParishramDetailsFromSource(source, candidateInfo);
+}
+
+// Value typed on the screen first, then SuccessFactors, then the fallback
+function pickDetail(screen, fromSf, field, fallback = "NA") {
+    return parishramRequired(screen?.[field] || fromSf?.[field], fallback);
+}
+
+function buildParishramCasePayload(payload, sfDetails = {}) {
     const candidate = payload.candidateInfo || {};
+    const screenDetails = payload.checkDetails || {};
+    const detailsFor = name => [screenDetails[name] || {}, sfDetails[name] || {}];
+    const [screenCandidate, sfCandidate] = detailsFor("candidate");
+    const candidateAddress = pickDetail(screenCandidate, sfCandidate, "address",
+        parishramRequired(candidate.client));
     const checks = payload.selectedChecks
         .map(check => String(check.name || check.id || "").trim())
         .filter(Boolean);
@@ -1418,48 +1550,50 @@ function buildParishramCasePayload(payload) {
     const candidatePhone = parishramRequired(candidate.phone);
     const candidateEmail = parishramRequired(candidate.email);
     const candidatePan = parishramRequired(candidate.panNumber);
-    const employeeCode = parishramRequired(candidate.employeeId || payload.employeeId);
 
     for (const checkName of checks) {
         if (checkName === "Employment Credential Check") {
+            const [screen, sf] = detailsFor(checkName);
             body[checkName] = {
-                employerName: parishramRequired(candidate.project || candidate.client),
-                designation: "Employee",
-                tenure: "1 Years",
-                employeeCode,
-                rmName: parishramRequired(candidate.managerName || candidate.fatherName),
-                rmNumber: candidatePhone,
-                hrName: parishramRequired(candidate.managerName || "HR Team"),
-                hrNumberMailId: candidateEmail
+                employerName: pickDetail(screen, sf, "employerName"),
+                designation: pickDetail(screen, sf, "designation"),
+                tenure: pickDetail(screen, sf, "tenure"),
+                employeeCode: pickDetail(screen, sf, "employeeCode"),
+                rmName: pickDetail(screen, sf, "rmName"),
+                rmNumber: pickDetail(screen, sf, "rmNumber"),
+                hrName: pickDetail(screen, sf, "hrName"),
+                hrNumberMailId: pickDetail(screen, sf, "hrNumberMailId")
             };
         } else if (checkName === "Educational Qualification Check") {
+            const [screen, sf] = detailsFor(checkName);
             body[checkName] = {
-                universityName: parishramRequired(candidate.project || "Unknown University"),
-                yearOfPassing: parishramRequired(formatAdammaIsoDate(candidate.joiningDate).slice(0, 4), "2020"),
-                collegeName: parishramRequired(candidate.client || "Unknown College"),
-                registrationEnrollmentNo: employeeCode,
-                rollNumber: employeeCode
+                universityName: pickDetail(screen, sf, "universityName"),
+                yearOfPassing: pickDetail(screen, sf, "yearOfPassing"),
+                collegeName: pickDetail(screen, sf, "collegeName"),
+                registrationEnrollmentNo: pickDetail(screen, sf, "registrationEnrollmentNo"),
+                rollNumber: pickDetail(screen, sf, "rollNumber")
             };
         } else if (checkName === "Criminal Verification through Court Record Check") {
             body[checkName] = {
                 name: candidateName,
                 dob: candidateDob,
                 fathersName: candidateFatherName,
-                address: parishramRequired(candidate.client)
+                address: candidateAddress
             };
         } else if (checkName === "Digital Residential Address Check") {
+            const [screen, sf] = detailsFor(checkName);
             body[checkName] = {
-                addressType: "Current",
+                addressType: pickDetail(screen, sf, "addressType", "Current"),
                 modeOfVerification: "Digital",
-                completeAddress: parishramRequired(candidate.client),
-                city: parishramRequired(candidate.client),
-                state: parishramRequired("Unknown"),
-                pinCode: "000000",
-                landmark: "NA",
-                contactNo: candidatePhone,
-                residentialType: "Rented",
-                tenure: "1 Years",
-                alternateNo: candidatePhone
+                completeAddress: pickDetail(screen, sf, "completeAddress"),
+                city: pickDetail(screen, sf, "city"),
+                state: pickDetail(screen, sf, "state"),
+                pinCode: pickDetail(screen, sf, "pinCode"),
+                landmark: pickDetail(screen, sf, "landmark"),
+                contactNo: pickDetail(screen, sf, "contactNo", candidatePhone),
+                residentialType: pickDetail(screen, sf, "residentialType"),
+                tenure: pickDetail(screen, sf, "tenure"),
+                alternateNo: pickDetail(screen, sf, "alternateNo", candidatePhone)
             };
         } else if (checkName === "Global Database Check") {
             body[checkName] = {
@@ -1467,7 +1601,7 @@ function buildParishramCasePayload(payload) {
                 dob: candidateDob,
                 fathersName: candidateFatherName,
                 gender: parishramRequired(candidate.gender || "NA"),
-                address: parishramRequired(candidate.client)
+                address: candidateAddress
             };
         } else if (checkName === "Directorship Check") {
             body[checkName] = {
@@ -1489,7 +1623,7 @@ function buildParishramCasePayload(payload) {
                 dob: candidateDob,
                 panCardNumber: candidatePan,
                 fathersName: candidateFatherName,
-                address: parishramRequired(candidate.client),
+                address: candidateAddress,
                 contactNumber: candidatePhone
             };
         } else if (checkName === "Credit & Bankruptcy Check") {
@@ -1511,7 +1645,7 @@ function buildParishramCasePayload(payload) {
                 name: candidateName,
                 dob: candidateDob,
                 fathersName: candidateFatherName,
-                address: parishramRequired(candidate.client)
+                address: candidateAddress
             };
         } else if (checkName === "Banned/Disqualified persons") {
             body[checkName] = {
@@ -1682,9 +1816,21 @@ async function submitParishramBGC(payload) {
 
     const selectedFiles = await getSelectedDocumentsForSubmission(payload);
     const documents = mapParishramDocuments(selectedFiles);
+    // Details HR did not fill on the screen are taken from SuccessFactors
+    let sfDetails = {};
+    try {
+        sfDetails = await getParishramCheckDetails({
+            employeeId: payload.employeeId,
+            educationRecordId: payload.educationRecordId,
+            previousEmploymentId: payload.previousEmploymentId,
+            candidateInfo: payload.candidateInfo
+        });
+    } catch (error) {
+        console.warn("Parishram: SuccessFactors details not loaded", error.message);
+    }
     const token = await getParishramToken();
     const requestBody = {
-        ...buildParishramCasePayload(payload),
+        ...buildParishramCasePayload(payload, sfDetails),
         ...documents.fields
     };
     const attachmentMessage = [
@@ -2230,6 +2376,7 @@ async function syncAdammaCaseStatus(employeeId, caseId) {
         hasReport: Boolean(summary.hasReport),
         lastSyncedAt
     });
+    const reportResult = await saveReportToSuccessFactors("adamma", employeeId, resolvedCaseId, "", summary);
     return {
         success: true,
         vendor: "Adamma",
@@ -2244,9 +2391,52 @@ async function syncAdammaCaseStatus(employeeId, caseId) {
         hasReport: Boolean(summary.hasReport),
         lastSyncedAt,
         checkDetails: summary.checkDetails,
-        sfUpdate,
+        sfUpdate: addReportResult(sfUpdate, reportResult),
         vendorResponse: summary.vendorResponse
     };
+}
+
+// Once a case is completed and the vendor has the report, the PDF is uploaded
+// to SF ("Employee BGV Report Summary") one time per case. Never fails the sync.
+async function saveReportToSuccessFactors(vendor, employeeId, caseId, refId, { status, hasReport }) {
+    const field = config.vendor.sfReportField;
+    if (!field || !config.vendor.sfWriteBack || !hasReport ||
+        String(status || "").toUpperCase() !== "COMPLETED") {
+        return null;
+    }
+    const stored = caseStore.getCase(employeeId);
+    if (stored?.reportSavedToSf?.caseId === String(caseId)) {
+        return { saved: false, alreadySaved: true, fileName: stored.reportSavedToSf.fileName };
+    }
+    try {
+        const report = await getVendorReport(vendor, caseId, refId);
+        const uploaded = await uploadBgvAttachment(employeeId, field, {
+            fileName: report.fileName,
+            base64: report.buffer.toString("base64")
+        });
+        rememberVendorCase(employeeId, {
+            vendor,
+            caseId,
+            reportSavedToSf: {
+                caseId: String(caseId),
+                fileName: uploaded.fileName,
+                attachmentId: uploaded.attachmentId,
+                savedAt: new Date().toISOString()
+            }
+        });
+        return { saved: true, fileName: uploaded.fileName };
+    } catch (error) {
+        console.warn("Report not saved to SuccessFactors", { employeeId, caseId, message: error.message });
+        return { saved: false, warning: `Report not saved to SF: ${error.message}` };
+    }
+}
+
+function addReportResult(sfUpdate, reportResult) {
+    if (!reportResult) return sfUpdate;
+    const update = { ...(sfUpdate || {}) };
+    update.report = reportResult;
+    if (reportResult.warning) update.warnings = [...(update.warnings || []), reportResult.warning];
+    return update;
 }
 
 // Vendor key ("cfirst") from a label ("cFirst") or key
@@ -2713,8 +2903,24 @@ function pickCFirstReport(reports, candidateId) {
     return {
         fileName: report.AttachmentName || `BGV_Report_${candidateId}.${type}`,
         contentType: type === "pdf" ? "application/pdf" : "application/octet-stream",
-        base64: String(report.AttachmentBody).replace(/\s/g, "")
+        base64: cleanCFirstBase64(report.AttachmentBody)
     };
+}
+
+// cFirst sends the report PDF as URL-encoded Base64 ("%2b" for "+",
+// "%2f" for "/", "%3d" for "="). It is decoded first, or the PDF is broken.
+function cleanCFirstBase64(value) {
+    let text = String(value || "").replace(/\s/g, "");
+    if (/%[0-9a-f]{2}/i.test(text)) {
+        try {
+            text = decodeURIComponent(text);
+        } catch {
+            text = text.replace(/%2b/gi, "+").replace(/%2f/gi, "/").replace(/%3d/gi, "=");
+        }
+    }
+    // URL-safe alphabet and missing padding
+    text = text.replace(/-/g, "+").replace(/_/g, "/");
+    return text.padEnd(Math.ceil(text.length / 4) * 4, "=");
 }
 
 // ---------------------------------------------------------------------------
@@ -2884,6 +3090,8 @@ async function syncVendorCaseStatus(vendor, employeeId, caseId, refId) {
         hasReport: Boolean(result.hasReport),
         lastSyncedAt
     });
+    const reportResult = await saveReportToSuccessFactors(
+        vendor, employeeId, resolvedCaseId, result.refId || resolved.refId || "", result);
     return {
         success: true,
         vendor: getVendorLabel(vendor),
@@ -2901,7 +3109,7 @@ async function syncVendorCaseStatus(vendor, employeeId, caseId, refId) {
         hasReport: Boolean(result.hasReport),
         lastSyncedAt,
         checkDetails: result.checkDetails,
-        sfUpdate,
+        sfUpdate: addReportResult(sfUpdate, reportResult),
         vendorResponse: result.vendorResponse
     };
 }
@@ -3093,6 +3301,11 @@ function formatAdammaIsoDate(value) {
 
 module.exports = {
     initiateBGC,
+    cleanCFirstBase64,
+    getParishramCheckDetails,
+    buildParishramDetailsFromSource,
+    buildParishramCasePayload,
+    PARISHRAM_DETAIL_FIELDS,
     getVendorChecks,
     getVendorCatalog,
     getLastKnownAdammaChecks,
