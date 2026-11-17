@@ -1,23 +1,58 @@
 {
+  "726": {
+    "vendor": "adamma",
+    "caseId": "ATES168",
+    "initiationDate": "2026-11-16T10:05:49.092Z",
+    "status": "Pending",
+    "vendorStatus": "Pending",
+    "color": "",
+    "remarks": [
+      "Data Entry Completed",
+      "Data Entry Completed"
+    ],
+    "vendorLabel": "Adamma",
+    "employeeId": "726",
+    "updatedAt": "2026-11-16T10:05:53.705Z",
+    "checks": [
+      {
+        "name": "Education",
+        "status": "Pending",
+        "color": "",
+        "remarks": "Data Entry Completed",
+        "updatedAt": "2026-11-16T10:05:49.109Z",
+        "raisedAt": ""
+      },
+      {
+        "name": "Employment",
+        "status": "Pending",
+        "color": "",
+        "remarks": "Data Entry Completed",
+        "updatedAt": "2026-11-16T10:05:49.120Z",
+        "raisedAt": ""
+      }
+    ],
+    "hasReport": false,
+    "lastSyncedAt": "2026-11-16T10:05:53.705Z"
+  },
   "728": {
     "vendor": "cfirst",
     "caseId": "61836",
     "refId": "8534252",
     "profileNumber": "CF-8534252-PROF",
     "initiationDate": "2026-11-05T00:00:00.000Z",
-    "status": "IN PROGRESS",
-    "vendorStatus": "In Progress (1 Insufficiency)",
-    "color": "",
+    "status": "COMPLETED",
+    "vendorStatus": "GREEN",
+    "color": "Green",
     "remarks": [
-      "EMPLOYMENT: Insuff - OFFER LETTER",
-      "EDUCATION: IN-PROGRESS",
-      "EDUCATION: GREEN"
+      "EDUCATION: GREEN",
+      "EDUCATION: GREEN",
+      "EMPLOYMENT: GREEN"
     ],
     "checks": [
       {
         "name": "Education",
-        "status": "In Progress",
-        "color": "",
+        "status": "Completed",
+        "color": "Green",
         "remarks": "",
         "updatedAt": "",
         "raisedAt": ""
@@ -32,18 +67,19 @@
       },
       {
         "name": "Employment",
-        "status": "Insufficiency",
-        "color": "",
-        "remarks": "Document Required: OFFER LETTER",
+        "status": "Completed",
+        "color": "Green",
+        "remarks": "",
         "updatedAt": "",
         "raisedAt": "2026-11-05T00:00:00.000Z"
       }
     ],
-    "hasReport": false,
-    "lastSyncedAt": "2026-11-10T05:52:51.419Z",
+    "hasReport": true,
+    "lastSyncedAt": "2026-11-16T11:56:46.984Z",
     "vendorLabel": "cFirst",
     "employeeId": "728",
-    "updatedAt": "2026-11-10T05:52:51.419Z"
+    "updatedAt": "2026-11-16T11:56:46.984Z",
+    "completionDate": "2026-11-12T00:00:00.000Z"
   },
   "1897": {
     "vendor": "adamma",
@@ -66,54 +102,24 @@
       }
     ],
     "hasReport": false,
-    "lastSyncedAt": "2026-11-10T05:52:48.617Z",
+    "lastSyncedAt": "2026-11-13T09:39:15.058Z",
     "vendorLabel": "Adamma",
     "employeeId": "1897",
-    "updatedAt": "2026-11-10T05:52:48.618Z"
+    "updatedAt": "2026-11-13T09:39:15.058Z"
   },
   "1006001": {
     "vendor": "adamma",
-    "caseId": "ATES157",
-    "initiationDate": "2026-11-03T00:00:00.000Z",
-    "status": "Completed",
-    "vendorStatus": "Completed",
-    "color": "Red",
+    "caseId": "ATES139",
+    "initiationDate": "",
+    "status": "INITIATED",
+    "vendorStatus": "INITIATED",
+    "color": "",
     "remarks": [
-      "Employment: Red",
-      "Identity: Green",
-      "Education: Green"
+      null,
+      null
     ],
-    "completionDate": "2026-11-05T05:54:33.056Z",
-    "checks": [
-      {
-        "name": "Education",
-        "status": "Completed",
-        "color": "Green",
-        "remarks": "Verified",
-        "updatedAt": "2026-11-03T09:38:08.042Z",
-        "raisedAt": ""
-      },
-      {
-        "name": "Employment",
-        "status": "Completed",
-        "color": "Red",
-        "remarks": "Verified in Red",
-        "updatedAt": "2026-11-03T09:38:08.037Z",
-        "raisedAt": ""
-      },
-      {
-        "name": "Identity",
-        "status": "Completed",
-        "color": "Green",
-        "remarks": "Verified",
-        "updatedAt": "2026-11-03T09:38:08.046Z",
-        "raisedAt": ""
-      }
-    ],
-    "hasReport": false,
-    "lastSyncedAt": "2026-11-11T06:12:40.890Z",
     "vendorLabel": "Adamma",
     "employeeId": "1006001",
-    "updatedAt": "2026-11-11T06:12:40.890Z"
+    "updatedAt": "2026-11-16T11:49:47.578Z"
   }
 }

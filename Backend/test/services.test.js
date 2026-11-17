@@ -3,6 +3,7 @@ const test = require("node:test");
 const axios = require("axios");
 const config = require("../src/config/config");
 const {
+    createBgvEmployee,
     getEmployeeDetails,
     getEmployeeAttachment,
     getAllEmployeeAttachments
@@ -100,6 +101,39 @@ test("extracts Adamma auth tokens from nested API envelopes", () => {
         }),
         "test-token"
     );
+});
+
+test("uses a visible standard checklist fallback when the Adamma checklist endpoint returns 404", async () => {
+    const originalPost = axios.post;
+    const originalGet = axios.get;
+
+    axios.post = async () => ({
+        data: {
+            data: {
+                authCode: "mock-adamma-token"
+            }
+        }
+    });
+    axios.get = async () => {
+        const error = new Error("Request failed with status code 404");
+        error.response = {
+            status: 404,
+            statusText: "Not Found",
+            data: {}
+        };
+        throw error;
+    };
+
+    try {
+        const catalog = await getVendorCatalog("Adamma");
+        assert.ok(catalog.checks.length > 0);
+        assert.equal(catalog.checks.some(check => check.name === "Education"), true);
+        assert.match(catalog.warning, /returned 404/i);
+        assert.deepEqual(catalog.packages, []);
+    } finally {
+        axios.post = originalPost;
+        axios.get = originalGet;
+    }
 });
 
 test("sends the generated Adamma token as a Bearer token for checklist retrieval", async () => {
@@ -1016,7 +1050,35 @@ test("loads cust_BGV attachments using both record and employee IDs", async () =
                         results: [{
                             externalCode: "BGV-17",
                             cust_Employee_ID: "1006001",
-                            cust_EmployeeName: "Diana Louis"
+                            cust_EmployeeName: "Diana Louis",
+                            cust_CustomerLocation: "Client Location"
+                        }]
+                    }
+                }
+            };
+        }
+
+        if (url.endsWith("/EmpJob")) {
+            assert.equal(options.params.$filter, "userId eq '1006001'");
+            assert.equal(options.params.$select, "userId,payGrade,division");
+            return {
+                data: {
+                    d: {
+                        results: [{ userId: "1006001", payGrade: "E8", division: "1101" }]
+                    }
+                }
+            };
+        }
+
+        if (url.endsWith("/FODivision")) {
+            assert.equal(options.params.$filter, "externalCode eq '1101'");
+            return {
+                data: {
+                    d: {
+                        results: [{
+                            externalCode: "1101",
+                            name: "Corporate Services",
+                            name_defaultValue: "Corporate Services"
                         }]
                     }
                 }
@@ -1058,6 +1120,9 @@ test("loads cust_BGV attachments using both record and employee IDs", async () =
 
     try {
         const details = await getEmployeeDetails("1006001");
+        assert.equal(details.employeeInfo.grade, "E8");
+        assert.equal(details.employeeInfo.subBusinessUnitName, "Corporate Services");
+        assert.equal(details.employeeInfo.client, "Client Location");
         assert.equal(details.documents.length, 1);
         assert.equal(details.documents[0].attachmentId, "1037");
         assert.match(details.documents[0].downloadUrl, /1006001/);
@@ -1081,6 +1146,105 @@ test("does not report an unconfigured vendor initiation as successful", async ()
             status: 501
         }
     );
+});
+
+test("saves hidden SuccessFactors employee fields in the BGV upsert", async () => {
+    const originalGet = axios.get;
+    const originalPost = axios.post;
+    const originalBaseUrl = config.successFactors.baseUrl;
+    let upsertBody;
+    const employeeRequests = [];
+    config.successFactors.baseUrl = "https://sf.test/odata/v2/cust_BGV";
+
+    axios.get = async (url, options = {}) => {
+        employeeRequests.push({ url, params: options.params || {} });
+        if (url.endsWith("/User")) {
+            return { data: { d: { results: [{ userId: "E123", defaultFullName: "Test Employee" }] } } };
+        }
+        if (url.endsWith("/EmpJob")) {
+            return {
+                data: {
+                    d: {
+                        results: [options.params.$select
+                            ? { businessUnit: "BU1", businessUnitNav: { name: "Business Unit" } }
+                            : { location: "New York", hireDate: "/Date(1735689600000)/" }]
+                    }
+                }
+            };
+        }
+        if (url.endsWith("/PerPerson")) {
+            return { data: { d: { results: [{ dateOfBirth: "/Date(325123200000+0000)/" }] } } };
+        }
+        if (url.endsWith("/PerPhone")) {
+            return {
+                data: {
+                    d: {
+                        results: [
+                            { phoneNumber: "5550000000", isPrimary: false },
+                            { phoneNumber: "5551234567", isPrimary: true }
+                        ]
+                    }
+                }
+            };
+        }
+        if (url.endsWith("/PerPersonal")) {
+            return { data: { d: { results: [{ gender: "M" }] } } };
+        }
+        if (url.endsWith("/PerNationalId")) {
+            return {
+                data: {
+                    d: {
+                        results: [
+                            { cardType: "PAN", nationalId: "ABCDE1234F" },
+                            { cardType: "ADN", nationalId: "123412341234" }
+                        ]
+                    }
+                }
+            };
+        }
+        if (url.endsWith("/PerEmail")) {
+            return { data: { d: { results: [{ emailAddress: "employee@example.com" }] } } };
+        }
+        throw new Error(`Unexpected SuccessFactors URL: ${url}`);
+    };
+    axios.post = async (url, body) => {
+        assert.equal(url, "https://sf.test/odata/v2/upsert");
+        upsertBody = body;
+        return { data: { d: [{ status: "OK", httpCode: 200 }] } };
+    };
+
+    try {
+        await createBgvEmployee({ employeeId: "E123", client: "Client Location" });
+        const record = upsertBody[0];
+        for (const entity of ["PerPerson", "PerPhone", "PerPersonal", "PerNationalId"]) {
+            const request = employeeRequests.find(item => item.url.endsWith(`/${entity}`));
+            assert.equal(request.params.$filter, "personIdExternal eq 'E123'");
+        }
+        assert.equal(
+            employeeRequests.find(item => item.url.endsWith("/PerEmail")).params.$filter,
+            "personIdExternal eq 'E123' and emailType eq '34402'"
+        );
+        const jobRequest = employeeRequests.find(item =>
+            item.url.endsWith("/EmpJob") && !item.params.$select
+        );
+        assert.equal(jobRequest.params.$filter, "userId eq 'E123'");
+        assert.ok(jobRequest.params.asOfDate);
+        assert.equal(record.cust_DOB, "/Date(325123200000+0000)/");
+        assert.equal(record.cust_PhoneNumber, "5551234567");
+        assert.equal(record.cust_Gender, "M");
+        assert.equal(record.cust_PANNumber, "ABCDE1234F");
+        assert.equal(record.cust_Aadharnumber, "123412341234");
+        assert.equal(record.cust_CandidateEmail, "employee@example.com");
+        assert.equal(record.cust_DOJ, "/Date(1735689600000)/");
+        assert.equal(record.cust_CustomerLocation, "Client Location");
+        assert.equal("location" in record, false);
+        assert.equal("dateOfBirth" in record, false);
+        assert.equal("phoneNumber" in record, false);
+    } finally {
+        axios.get = originalGet;
+        axios.post = originalPost;
+        config.successFactors.baseUrl = originalBaseUrl;
+    }
 });
 
 test("continues previous-employment lookup when one filter uses an invalid property", async () => {

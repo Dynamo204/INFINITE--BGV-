@@ -346,25 +346,44 @@ tr:hover {
 
 .employee-info {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 30px;
-    padding: 20px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 20px 30px;
+    padding: 18px 20px;
+    align-items: start;
 }
 
-.employee-info div {
+.employee-info-column {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.employee-info-row {
     display: grid;
-    grid-template-columns: minmax(105px, max-content) minmax(0, 1fr);
+    grid-template-columns: minmax(110px, 145px) minmax(0, 1fr);
     column-gap: 8px;
-    row-gap: 12px;
-    align-items: baseline;
+    align-items: center;
+    min-height: 34px;
 }
 
-.employee-info strong {
-    margin-top: 0;
+.employee-info-label {
+    font-size: 15px;
+    font-weight: 700;
+    color: #1f2a37;
+    line-height: 1.4;
 }
 
-.employee-info strong::after {
-    content: ":";
+.employee-info-value {
+    font-size: 16px;
+    color: #1f2a37;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
+.employee-info-value-picker {
+    display: flex;
+    align-items: center;
+    min-height: 32px;
 }
 
 .configuration {

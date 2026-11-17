@@ -436,6 +436,30 @@ async function getVendorCatalog(vendor) {
         return getCFirstCatalog();
     }
 
+    if (String(vendor).toLowerCase() === "adamma") {
+        try {
+            return {
+                checks: await getVendorChecks(vendor),
+                packages: []
+            };
+        } catch (error) {
+            const status = error?.cause?.response?.status || error?.response?.status;
+            if (status !== 404) {
+                throw error;
+            }
+
+            console.warn("Adamma checklist endpoint returned 404; using the standard checklist", {
+                status,
+                message: error.message
+            });
+            return {
+                checks: getLastKnownAdammaChecks(),
+                packages: [],
+                warning: "The Adamma checklist endpoint returned 404. Showing the standard checklist; verify the configured endpoint and client contract with Adamma."
+            };
+        }
+    }
+
     if (String(vendor).toLowerCase() === "vibrant") {
         if (!config.vibrant.loadChecksFromApi) {
             return {
@@ -2892,7 +2916,7 @@ async function initiateAdammaBGC(payload) {
         clientName,
         subclientName,
         candidateName: parishramValue(candidate.name),
-        empid: parishramValue(payload.preProfileNumber || candidate.employeeId || payload.employeeId),
+        empid: parishramValue(payload.employeeId || candidate.employeeId || payload.preProfileNumber),
         dateofbirth: formatAdammaDate(candidate.dob),
         fathername: parishramValue(candidate.fatherName),
         aadhernumber: parishramValue(candidate.aadhaarNumber),
