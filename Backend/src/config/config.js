@@ -94,6 +94,9 @@ module.exports = {
         // SF "Completion Date": set when the vendor completes the case.
         // Set SF_COMPLETION_DATE_FIELD= (empty) to stop writing it.
         sfCompletionDateField: process.env.SF_COMPLETION_DATE_FIELD ?? "cust_CompletionDate",
+        // SF attachment field for the vendor's final report PDF
+        // ("Employee BGV Report Summary"); empty = do not upload the report.
+        sfReportField: process.env.SF_REPORT_FIELD ?? "cust_EmployeeBGVReportSummary",
         // SF field that records which vendor the case went to, and the
         // picklist code for each vendor (as shown in SF, e.g. "Adamma (Adamma)").
         // SF_VENDOR_MAP in .env overrides a code, e.g. '{"parishram":"PARISHRAM"}'.

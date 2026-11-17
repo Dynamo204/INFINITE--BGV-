@@ -202,6 +202,53 @@ async function updateBgvRecord(employeeId, fields) {
     return { record, keyPath, result };
 }
 
+// Uploads a file to SF (Attachment) and links it to an attachment field of
+// the employee's cust_BGV record, e.g. cust_EmployeeBGVReportSummary.
+// Step 1: POST /upsert Attachment -> new attachmentId
+// Step 2: POST /upsert cust_BGV with <field>Nav pointing to that Attachment
+async function uploadBgvAttachment(employeeId, field, { fileName, base64 }) {
+    const auth = {
+        username: config.successFactors.username,
+        password: config.successFactors.password
+    };
+    const userId = process.env.SF_ATTACHMENT_USER_ID ||
+        String(config.successFactors.username || "").split("@")[0];
+    let response;
+    try {
+        response = await axios.post(`${getODataBaseUrl()}/upsert`, [{
+            __metadata: { uri: "Attachment" },
+            fileName,
+            fileContent: base64,
+            module: "GENERIC_OBJECT",
+            userId,
+            viewable: true,
+            deletable: true
+        }], {
+            auth,
+            headers: { Accept: "application/json", "Content-Type": "application/json" },
+            params: { $format: "json" },
+            timeout: 60000,
+            maxBodyLength: Infinity
+        });
+    } catch (error) {
+        const message = error.response?.data?.error?.message?.value || error.message;
+        throw new Error(`SuccessFactors attachment upload failed: ${message}`, { cause: error });
+    }
+    const rows = Array.isArray(response?.data?.d) ? response.data.d : getODataObject(response?.data);
+    const row = rows[0] || {};
+    if (String(row.status || "").toUpperCase() === "ERROR" || Number(row.httpCode) >= 400) {
+        throw new Error(`SuccessFactors attachment upload failed: ${row.message || "unknown error"}`);
+    }
+    const attachmentId = String(row.key || "").match(/attachmentId=(\d+)/i)?.[1];
+    if (!attachmentId) {
+        throw new Error(`SuccessFactors did not return the new attachment ID (${row.key || "no key"})`);
+    }
+    await updateBgvRecord(employeeId, {
+        [`${field}Nav`]: { __metadata: { uri: `Attachment(attachmentId=${attachmentId}L)` } }
+    });
+    return { attachmentId, fileName };
+}
+
 // A picklist can hold the same label twice, e.g. "Parishram" as code 04
 // (inactive, status "I") and code 4 (active, status "A"). SF accepts an
 // inactive code without an error but does not keep or show it, so only
@@ -1208,6 +1255,7 @@ module.exports = {
     getCFirstCandidateSourceData,
     findBgvRecordByEmployeeId,
     updateBgvRecord,
+    uploadBgvAttachment,
     resolveBgvStatusCode,
     findPicklistCode,
     getCaseIdField,
